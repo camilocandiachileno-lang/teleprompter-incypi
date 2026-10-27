@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Teleprompter INCYPI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: barra fija arriba, guion en una columna ancha, línea de lectura fija al 32% de la pantalla */
+:root{
+  --bg:#0f1214; --panel:#171b1e; --line:#2a3035;
+  --text:#f3f0e6; --said:#5d666d; --accent:#ffb547; --ok:#5fd38d; --warn:#ffb547; --bad:#ff6b5e;
+  --font-read:"Atkinson Hyperlegible", "Segoe UI", Roboto, system-ui, sans-serif;
+  --font-num:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --size:36px;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font-read);-webkit-tap-highlight-color:transparent;overflow:hidden}
+[hidden]{display:none!important}
+
+header{position:fixed;inset:0 0 auto;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+button{font:inherit;font-size:16px;color:var(--text);background:#232a2f;border:1px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer;min-height:44px}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:active{transform:translateY(1px)}
+#mic{background:var(--accent);color:#1b1408;border-color:var(--accent);font-weight:700;min-width:150px}
+#mic.on{background:#3a1f1c;color:#ffd9d4;border-color:var(--bad)}
+.group{display:flex;gap:6px}
+.status{display:flex;align-items:center;gap:8px;font-size:15px;color:#b9c1c7;min-width:0;flex:1 1 180px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--said);flex:none}
+.dot.live{background:var(--ok);box-shadow:0 0 0 4px rgba(95,211,141,.18);animation:pulse 1.6s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 7px rgba(95,211,141,.06)}}
+.clock{font-family:var(--font-num);font-variant-numeric:tabular-nums;text-align:right;line-height:1.15}
+#time{font-size:24px;color:var(--ok)}
+#time.warn{color:var(--warn)} #time.bad{color:var(--bad)}
+#goal{font-size:12px;color:#8d969c;letter-spacing:.04em}
+
+#scroller{position:fixed;inset:0;overflow-y:auto;scroll-behavior:smooth;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+#script{max-width:980px;margin:0 auto;padding-top:34vh;padding-bottom:70vh;font-size:var(--size);line-height:1.55}
+.slide{margin:0 0 1.4em}
+.slide h2{font-family:var(--font-num);font-size:max(13px,calc(var(--size)*.38));font-weight:500;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin:0 0 .5em;opacity:.85}
+.slide p{margin:0 0 .7em}
+.w{border-radius:.15em;transition:color .25s}
+.w.said{color:var(--said)}
+.w.cur{background:var(--accent);color:#1b1408;box-shadow:0 0 0 .08em var(--accent)}
+
+#guide{position:fixed;left:0;right:0;top:32vh;height:0;border-top:2px dashed rgba(255,181,71,.28);pointer-events:none;z-index:2}
+#guide::before{content:"▶";position:absolute;left:max(4px,env(safe-area-inset-left,0px));top:-.75em;color:var(--accent);font-size:20px}
+
+#msg{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 18px);z-index:6;
+  max-width:min(640px,calc(100% - 32px));background:#2b2016;border:1px solid var(--accent);color:#ffe2b8;border-radius:12px;padding:12px 16px;font-size:16px;line-height:1.4}
+@media (prefers-reduced-motion:reduce){#scroller{scroll-behavior:auto}.dot.live{animation:none}}
+@media (max-width:600px){:root{--size:26px} #mic{min-width:0}}
+</style>
+</head>
+<body>
+<header>
+  <button id="mic" type="button">🎙 Escuchar</button>
+  <div class="group">
+    <button id="prev" type="button" aria-label="Frase anterior">◀</button>
+    <button id="next" type="button" aria-label="Frase siguiente">▶</button>
+  </div>
+  <div class="group">
+    <button id="smaller" type="button" aria-label="Letra más chica">A−</button>
+    <button id="bigger" type="button" aria-label="Letra más grande">A+</button>
+  </div>
+  <button id="reset" type="button">Reiniciar</button>
+  <div class="status"><span class="dot" id="dot"></span><span id="state">Toca Escuchar y empieza a hablar</span></div>
+  <div class="clock"><div id="time">0:00</div><div id="goal">META 7:00 · MÁX 7:30</div></div>
+</header>
+<div id="guide"></div>
+<div id="scroller"><div id="script"></div></div>
+<div id="msg" hidden></div>
+
+<script>
+const SLIDES = [
+["Diapo 1 · Portada", "0:30", ["Buenos días. Somos el grupo Zorro y hoy les vamos a presentar el Índice de Madurez Digital & IA de las Empresas, un estudio de INCYPI (expertos en transformación digital e inteligencia artificial). La idea es explicarles qué mide, qué encontró y qué nos dice sobre cómo las organizaciones se están adaptando a la inteligencia artificial. Yo voy a presentar el contexto, el modelo y los resultados generales, y mi compañera va a profundizar en cada dimensión y en los casos chilenos."]],
+["Diapo 2 · Contexto histórico", "1:30", ["Este informe es la octava edición del estudio, publicado en octubre de 2024, y analiza empresas en España durante el periodo 2024–2025. Lo interesante es el momento en que se hizo. La IA y, sobre todo, la IA generativa irrumpieron de forma masiva y obligaron a las empresas a repensar cómo operan.", "El estudio busca diagnosticar la digitalización de forma holística, es decir, mirando la organización completa y no solo la tecnología. Y su principal hallazgo de contexto es cómo la necesidad de incorporar la IA con criterio estratégico, ético y rentable frenó temporalmente el avance de la transformación digital tradicional."]],
+["Diapo 3 · Objetivo y antecedentes", "2:30", ["¿A quién le preguntaron? A directivos de nivel medio y alto, desde la alta gerencia hasta jefaturas de áreas como marketing o recursos humanos. Esto importa porque cruza dos miradas: la visión estratégica de arriba y las tensiones del día a día que viven las jefaturas intermedias cuando tienen que implementar los cambios.", "Para medir la madurez, el modelo usa 17 indicadores agrupados en 4 dimensiones: Estrategia Digital, Customer Centric, Digital Business, y Personas y Cultura. Esas cuatro dimensiones son la columna vertebral de toda la presentación."]],
+["Diapo 4 · Cinco preguntas clave", "3:30", ["El estudio responde cinco preguntas. Primero, cuál es el nivel general de madurez y qué pasa con la brecha entre empresas. Segundo, cómo el liderazgo y las hojas de ruta están impulsando la IA. Tercero, en qué estado están la cultura, el talento digital y la gestión del cambio. Cuarto, cuánto han avanzado en gestión basada en datos y en sostenibilidad. Y quinto, cómo usan la IA para mejorar la experiencia del cliente.", "La primera mira el panorama general, y las otras cuatro recorren lo que evalúan las dimensiones. Vamos a ir respondiéndolas a lo largo de la presentación."]],
+["Diapo 5 · Evolución y polarización de la brecha", "4:45", ["Empecemos por la primera pregunta: la brecha tecnológica. La IA no llegó de forma pareja. Las empresas avanzadas, que ya tenían estructuras flexibles, la aprovecharon para escalar rápido hacia niveles innovadores.", "Pero al mismo tiempo pasó algo que el estudio llama retroceso reflexivo: muchas empresas del segmento intermedio retrocedieron a fases iniciales. No es que lo hicieran mal, sino que tuvieron que frenar sus hojas de ruta para replantearlas con la IA en mente.", "La digitalización no es un camino lineal. Cuando aparece un cambio de paradigma externo, las empresas tienen que redefinir sus prioridades de inversión y su gobernanza interna. Por eso, las que tenían estructuras flexibles se adaptaron mejor."]],
+["Diapo 6 · Clasificación de estadios", "6:00", ["Para ubicar a cada empresa, el estudio define cuatro estadios.", "En el Estadio 1, Básica, hay iniciativas digitales aisladas, sin un propósito común.", "En el Estadio 2, Inicial, ya hay planes, pero solo en algunos departamentos. El riesgo es la fractura en silos funcionales: áreas que avanzan cada una por su lado, sin coordinarse.", "En el Estadio 3, Estratégica, la estrategia digital es transversal y la empresa está en buena posición para avanzar.", "Y en el Estadio 4, Innovadora-Disruptiva, están las líderes, que usan IA para transformar operaciones, clientes y modelos de negocio, con una cultura orientada al dato.", "(El retroceso que vimos antes es justamente eso: empresas que bajaron del Estadio 3 al 2.)"]],
+["Diapo 7 · Resultados", "7:00", ["¿Y cómo salen las cuatro dimensiones? Todas quedan en torno al 5 sobre 10, apenas aprobadas.", "Estrategia Digital es la más alta, con 5,5: liderazgo, hoja de ruta y decisiones basadas en datos. Le sigue Customer Centric, con 5,2, que pone al cliente al centro. Digital Business tiene 5,0: está estancada en madurez digital, pero es la dimensión que más avanza en IA. Y Personas y Cultura también tiene 5,0, e incorpora un indicador nuevo, la gestión del cambio, para acompañar el impacto de la IA en el trabajo.", "Ahora mi compañera les va a mostrar qué hay detrás de cada una de estas notas, empezando por Estrategia Digital."]]
+];
+
+/* ---------- texto → palabras ---------- */
+const norm = s => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9ñ]/g,"");
+const scriptEl = document.getElementById("script");
+const els = [];        // span de cada palabra
+const toks = [];       // {n: normalizado, el, slide, sentenceStart}
+SLIDES.forEach(([title, goal, paras], si) => {
+  const sec = document.createElement("section"); sec.className = "slide";
+  const h = document.createElement("h2"); h.textContent = title + "  ·  meta " + goal; sec.appendChild(h);
+  paras.forEach(p => {
+    const pe = document.createElement("p");
+    let newSentence = true;
+    p.split(/\s+/).forEach((raw, k) => {
+      const sp = document.createElement("span"); sp.className = "w"; sp.textContent = raw;
+      pe.appendChild(sp); pe.appendChild(document.createTextNode(" "));
+      const n = norm(raw);
+      if (n) {
+        sp.dataset.i = toks.length;
+        toks.push({n, el: sp, slide: si, sentenceStart: newSentence});
+        newSentence = /[.?:]$/.test(raw);
+      }
+    });
+    sec.appendChild(pe);
+  });
+  scriptEl.appendChild(sec);
+});
+const N = toks.length;
+
+/* ---------- comparación tolerante ---------- */
+function lev(a,b){ if(Math.abs(a.length-b.length)>1) return 2;
+  const d=[...Array(b.length+1).keys()];
+  for(let i=1;i<=a.length;i++){let prev=d[0];d[0]=i;
+    for(let j=1;j<=b.length;j++){const t=d[j];d[j]=Math.min(d[j]+1,d[j-1]+1,prev+(a[i-1]===b[j-1]?0:1));prev=t;}}
+  return d[b.length]; }
+function match(a,b){
+  if(!a||!b) return false; if(a===b) return true;
+  const L=Math.min(a.length,b.length);
+  if(L>=5 && a.slice(0,5)===b.slice(0,5) && Math.abs(a.length-b.length)<=3) return true;
+  if(L>=4 && lev(a,b)<=1) return true;
+  return false;
+}
+
+/* ---------- seguimiento: ¿dónde va el que habla? ---------- */
+function advance(tail, pos){
+  const last = tail[tail.length-1];
+  let best=-1, bestVal=-1e9;
+  const scan = (from, to, minScore) => {
+    for(let j=from;j<to;j++){
+      if(!match(last, toks[j].n)) continue;
+      let score=1, si=j-1;
+      for(let k=tail.length-2;k>=0 && score<5;k--){
+        for(let s=si;s>=Math.max(si-2,0);s--){ if(match(tail[k],toks[s].n)){score++;si=s-1;break;} }
+      }
+      const dist=j-pos;
+      let ok;
+      if(last.length<=2) ok = dist<=1;
+      else ok = dist<=1 || (dist<=5 && score>=2) || score>=3 || (last.length>=7 && dist<=3);
+      if(!ok || score<minScore) continue;
+      const val = score - dist*0.12;
+      if(val>bestVal){bestVal=val;best=j;}
+    }
+  };
+  scan(pos, Math.min(N,pos+15), 1);
+  if(best<0) scan(Math.min(N,pos+15), Math.min(N,pos+90), 3);   // se saltó un trozo
+  return best<0 ? pos : best+1;
+}
+
+let committed = 0;      // palabras confirmadas (resultados finales)
+let shown = 0;          // posición mostrada (incluye lo provisional)
+let heardTail = [];     // últimas palabras dichas (finales)
+function feed(words, pos, tail){
+  for(const w of words){ const n=norm(w); if(!n) continue; tail.push(n); if(tail.length>6) tail.shift(); pos=advance(tail,pos); }
+  return pos;
+}
+
+/* ---------- pintar ---------- */
+let painted = -1;
+function paint(pos, scroll=true){
+  pos=Math.max(0,Math.min(N,pos));
+  if(pos===painted) return;
+  const a=Math.min(pos,painted<0?0:painted), b=Math.max(pos,painted<0?N:painted);
+  for(let i=Math.max(0,a-1);i<Math.min(N,b+1);i++){
+    toks[i].el.classList.toggle("said", i<pos);
+    toks[i].el.classList.toggle("cur", i===pos);
+  }
+  painted=pos;
+  const t = toks[Math.min(pos,N-1)];
+  stateText(SLIDES[t.slide][0] + (pos>=N ? " · terminaste" : ""));
+  if(scroll) scrollTo(t.el);
+}
+const scroller=document.getElementById("scroller");
+function scrollTo(el){
+  const r=el.getBoundingClientRect(), target=scroller.scrollTop + r.top - window.innerHeight*0.32 + r.height*0.2;
+  if(Math.abs(target-scroller.scrollTop)>4) scroller.scrollTo({top:target});
+}
+function setPos(p){ committed=shown=Math.max(0,Math.min(N,p)); heardTail=[]; painted=-2; for(const t of toks) t.el.classList.remove("said","cur"); paint(shown); }
+
+/* ---------- reloj ---------- */
+let elapsed=0, runningSince=null, tick=null;
+const timeEl=document.getElementById("time");
+function fmt(s){s=Math.floor(s);return Math.floor(s/60)+":"+String(s%60).padStart(2,"0");}
+function updateClock(){
+  const s = elapsed + (runningSince? (Date.now()-runningSince)/1000 : 0);
+  timeEl.textContent=fmt(s);
+  timeEl.className = s>450 ? "bad" : s>420 ? "warn" : "";
+}
+function clockStart(){ if(runningSince) return; runningSince=Date.now(); tick=setInterval(updateClock,250); }
+function clockStop(){ if(!runningSince) return; elapsed+=(Date.now()-runningSince)/1000; runningSince=null; clearInterval(tick); updateClock(); }
+
+/* ---------- mensajes ---------- */
+const msgEl=document.getElementById("msg"), stateEl=document.getElementById("state"), dot=document.getElementById("dot");
+function stateText(t){ stateEl.textContent=t; }
+let msgTimer;
+function showMsg(t, ms=7000){ msgEl.textContent=t; msgEl.hidden=false; clearTimeout(msgTimer); if(ms) msgTimer=setTimeout(()=>msgEl.hidden=true, ms); }
+
+/* ---------- micrófono ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn=document.getElementById("mic");
+let rec=null, listening=false, wake=null, finalsDone=0;
+async function keepAwake(){ try{ wake = await navigator.wakeLock?.request("screen"); }catch(e){} }
+document.addEventListener("visibilitychange",()=>{ if(listening && document.visibilityState==="visible") keepAwake(); });
+
+function startRec(){
+  if(!SR){ showMsg("Este navegador no reconoce voz. Abre el archivo en Chrome (Android) o Safari (iPad). Mientras, puedes avanzar con ▶ o tocando una palabra.", 0); return; }
+  rec = new SR(); rec.lang="es-CL"; rec.continuous=true; rec.interimResults=true; rec.maxAlternatives=1;
+  rec.onstart=()=>{ finalsDone=0; };
+  rec.onresult=(e)=>{
+    let interim=[];
+    for(let i=finalsDone;i<e.results.length;i++){
+      const r=e.results[i], words=r[0].transcript.trim().split(/\s+/);
+      if(r.isFinal && i===finalsDone){ committed=feed(words, committed, heardTail); finalsDone=i+1; }
+      else interim.push(...words);
+    }
+    const tmpTail=heardTail.slice();
+    shown=Math.max(committed, feed(interim, committed, tmpTail));
+    paint(shown);
+  };
+  rec.onerror=(e)=>{
+    if(e.error==="not-allowed"||e.error==="service-not-allowed"){
+      stopListening();
+      showMsg("No tengo permiso para usar el micrófono. Revisa el permiso del navegador para este archivo, o ábrelo en Chrome. Igual puedes avanzar con ▶ o tocando una palabra.", 0);
+    } else if(e.error==="network"){
+      stopListening();
+      showMsg("Este navegador no tiene acceso al servicio de voz (pasa en la vista previa de Claude, Brave u Opera). Abre el archivo con Google Chrome. Mientras, puedes avanzar con ▶ o tocando una palabra.", 0);
+    } else if(e.error==="audio-capture"){
+      stopListening();
+      showMsg("No encuentro un micrófono. Revisa que esté conectado y que el navegador lo tenga permitido.", 0);
+    }
+  };
+  rec.onend=()=>{ if(listening){ try{rec.start();}catch(_){} } };
+  try{ rec.start(); }catch(_){}
+}
+function startListening(){
+  listening=true; micBtn.textContent="⏸ Pausar"; micBtn.classList.add("on"); dot.classList.add("live");
+  clockStart(); keepAwake(); startRec(); paint(shown);
+}
+function stopListening(){
+  listening=false; micBtn.textContent="🎙 Escuchar"; micBtn.classList.remove("on"); dot.classList.remove("live");
+  clockStop(); try{rec&&rec.abort();}catch(_){} rec=null; try{wake&&wake.release();}catch(_){}
+  committed=shown;
+}
+micBtn.addEventListener("click",()=> listening ? stopListening() : startListening());
+
+/* ---------- controles manuales ---------- */
+function sentenceJump(dir){
+  let i=shown;
+  if(dir>0){ i++; while(i<N && !toks[i].sentenceStart) i++; }
+  else { i--; while(i>0 && !toks[i].sentenceStart) i--; if(shown-i<=1 && i>0){ i--; while(i>0 && !toks[i].sentenceStart) i--; } }
+  setPos(i);
+}
+document.getElementById("next").onclick=()=>sentenceJump(1);
+document.getElementById("prev").onclick=()=>sentenceJump(-1);
+scriptEl.addEventListener("click",e=>{ const w=e.target.closest(".w"); if(w && w.dataset.i!==undefined) setPos(+w.dataset.i); });
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowDown"||e.key==="ArrowRight"||e.key==="PageDown"){e.preventDefault();sentenceJump(1);}
+  if(e.key==="ArrowUp"||e.key==="ArrowLeft"||e.key==="PageUp"){e.preventDefault();sentenceJump(-1);}
+  if(e.key===" "){e.preventDefault(); micBtn.click();}
+});
+let size;
+try{ size=+localStorage.getItem("tp-size")||0; }catch(_){ size=0; }
+function setSize(px){ size=Math.max(18,Math.min(80,px)); document.documentElement.style.setProperty("--size",size+"px"); try{localStorage.setItem("tp-size",size);}catch(_){} const t=toks[Math.min(shown,N-1)]; requestAnimationFrame(()=>scrollTo(t.el)); }
+if(size) setSize(size);
+const curSize=()=>parseFloat(getComputedStyle(scriptEl).fontSize);
+document.getElementById("bigger").onclick=()=>setSize(curSize()+4);
+document.getElementById("smaller").onclick=()=>setSize(curSize()-4);
+document.getElementById("reset").onclick=()=>{ stopListening(); elapsed=0; updateClock(); setPos(0); };
+
+if(!SR) showMsg("Este navegador no reconoce voz. Abre el archivo en Chrome (Android) o Safari (iPad). Mientras, puedes avanzar con ▶ o tocando una palabra.", 0);
+setPos(0);
+</script>
+</body>
+</html>
